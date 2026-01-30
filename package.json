@@ -21,6 +21,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "dependencies": {
+    "@langchain/core": "^1.1.17",
+    "@langchain/groq": "^1.0.3",
     "@nestjs/cache-manager": "^3.1.0",
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^4.0.2",
@@ -28,6 +30,7 @@
     "@nestjs/mapped-types": "*",
     "@nestjs/platform-express": "^10.0.0",
     "cache-manager-redis-store": "^3.0.1",
+    "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
     "groq-sdk": "^0.37.0",
     "reflect-metadata": "^0.1.13",

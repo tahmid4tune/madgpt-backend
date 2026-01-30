@@ -1,6 +1,7 @@
-import { Controller, Post, Body, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Get, Param, Delete } from '@nestjs/common';
 import { ChatService } from './chat.service';
-import { ChatDto } from './dto/chat.dto';
+import { ChatDto, ChatMessageResponseDto } from './dto/chat.dto';
+import { plainToInstance } from 'class-transformer';
 
 @Controller('chat')
 export class ChatController {
@@ -17,7 +18,15 @@ export class ChatController {
   }
 
   @Get(':chatId')
-  getMessagesByChatId(@Param('chatId') id: string) {
-    return this.chatService.getMessagesByChatId(id);
+  async getMessagesByChatId(@Param('chatId') id: string) {
+    const message = await this.chatService.getMessagesByChatId(id);
+    return plainToInstance(ChatMessageResponseDto, message, {
+      excludeExtraneousValues: true,
+    });
+  }
+
+  @Delete(':chatId')
+  deleteThreadByChatId(@Param('chatId') id: string) {
+    return this.chatService.deleteChatHistory(id);
   }
 }
