@@ -14,7 +14,7 @@ export class ChatController {
 
   @Get('history')
   getChatHistory() {
-    return this.chatService.getChatHistory();
+    return this.chatService.getChatHistoryList();
   }
 
   @Get(':chatId')

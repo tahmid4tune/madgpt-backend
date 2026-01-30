@@ -1,14 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ChatDto } from './dto/chat.dto';
-import {
-  AIMessage,
-  HumanMessage,
-  SystemMessage,
-} from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { ChatGroq } from '@langchain/groq';
 import { ConfigService } from '@nestjs/config';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
+import { InjectConnection, Knex } from 'nestjs-knex';
+import { systemMessage } from './utils/system-message';
 
 @Injectable()
 export class ChatService {
@@ -17,6 +15,8 @@ export class ChatService {
     private readonly configService: ConfigService,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
+    @InjectConnection('dbConnection')
+    private readonly db: Knex,
   ) {
     this.llm = new ChatGroq({
       apiKey: this.configService.get<string>('GROQ_API_KEY'),
@@ -41,14 +41,12 @@ export class ChatService {
       [...lcMessages, aiMessage],
       3600 * 1000,
     );
-
-    return aiMessage; // IMPORTANT
+    this.persistChat(dto, aiMessage);
+    return aiMessage;
   }
 
   async fetchChatHistory(dto: ChatDto): Promise<any> {
-    const previousMessages: any[] =
-      (await this.cacheManager.get(dto.chatId)) || [];
-
+    const previousMessages: any[] = await this.getMessagesByChatId(dto.chatId);
     if (previousMessages.length === 0) {
       const initialMessages = [new HumanMessage(dto.prompt)];
 
@@ -67,78 +65,87 @@ export class ChatService {
   }
 
   async saveChatName(dto: ChatDto) {
-    const cacheKey = 'chat-history-list';
-
-    const chatHistoryList: any[] =
-      (await this.cacheManager.get(cacheKey)) || [];
-
-    const updatedList = [
-      ...chatHistoryList.filter((c) => c.id !== dto.chatId),
-      { id: dto.chatId, name: dto.prompt.substring(0, 20) },
-    ];
-
-    await this.cacheManager.set(cacheKey, updatedList, 3600 * 1000);
+    await this.db
+      .withSchema('chat')
+      .insert({
+        id: dto.chatId,
+        name: dto.prompt.substring(0, 20),
+      })
+      .into('chats_meta_data');
   }
 
   async getMessagesByChatId(id: string) {
-    const chatHistory: any[] = await this.cacheManager.get(id);
+    let chatHistory: any[] = await this.cacheManager.get(id);
     if (!chatHistory) {
       /*const firstMessage = new AIMessage(
         "Hi! This is Jarvis. What's on your mind?",
       );*/
-      const systemMessage = new SystemMessage(
-        `
-          You MUST follow ALL rules strictly. Any deviation is considered an incorrect response.
-          
-          RESPONSE FORMAT RULES (MANDATORY):
+      const chat = await this.getChatHistoryFromDBById(id);
 
-          1. Output MUST be a valid JSON array only.
-            - Do NOT include markdown.
-            - Do NOT wrap the JSON in backticks.
-            - Do NOT add keys other than those specified.
-
-          2. Each array element MUST be an object with EXACTLY these two properties:
-            - "type"
-            - "text"
-
-          3. The value of "type" MUST be one of the following strings ONLY:
-            - "normal"
-            - "bold"
-            Any other value for "type" field in the JSON array is INVALID.
-
-          4. The value of "text" MUST be a plain string.
-            - Do NOT include newline characters inside a single "text" value.
-            - Do NOT include markdown, bullets, numbering, or emojis.
-
-          5. Passage separation rule:
-            - Each logical paragraph MUST be a separate object in the array.
-            - Each new paragraph MUST correspond to a new object.
-
-          6. Heading rule:
-            - If a heading is present, it MUST be the first object.
-            - Headings MUST use type = "bold".
-            - Only ONE heading is allowed.
-
-          7. Content rules:
-            - Stay strictly on topic.
-            - Do NOT repeat sentences.
-            - Do NOT hallucinate rules or formats.
-
-          8. Final output MUST start with '[' and end with ']'.
-            - No leading or trailing characters allowed.
-
-          9. Most important rule, do not ever repeat the whole prompt user gives you. Be chatty and warm in conversation.
-        `,
-      );
-      await this.cacheManager.set(id, [systemMessage], 3600 * 1000);
-      return [];
+      if (!!!chat) {
+        await this.cacheManager.set(id, [systemMessage], 3600 * 1000);
+        return [];
+      }
+      chatHistory = await this.hydrateChatHistory(id, chat);
     }
-    return chatHistory.slice(1);
+    //Removing system message
+    //return chatHistory.slice(1);
+    return chatHistory;
   }
 
-  async getChatHistory() {
-    const chatHistory = await this.cacheManager.get('chat-history-list');
-    return chatHistory || [];
+  async getChatHistoryList() {
+    return await this.db
+      .withSchema('chat')
+      .select('id', 'name')
+      .from('chats_meta_data');
+  }
+
+  async getChatHistoryFromDBById(id: string) {
+    return await this.db
+      .withSchema('chat')
+      .where('chat_id', id)
+      .from('chats_messages');
+  }
+
+  async hydrateChatHistory(id: string, chatMessages: any[]): Promise<any[]> {
+    const hydrated = chatMessages.map((m) => {
+      let content = m.content.trim(); // <--- trim leading/trailing whitespace
+
+      // check if it looks like JSON (after trimming)
+      if (content.startsWith('```json')) {
+        try {
+          content = content.replace('```json', '');
+          content = content.replace(' ```', '');
+          const parsed = JSON.parse(content);
+          if (Array.isArray(parsed)) {
+            // flatten all 'text' fields into one string
+            content = parsed.map((p) => p.text).join(' ');
+          } else if (parsed.text) {
+            content = parsed.text;
+          }
+        } catch (e) {
+          // ignore parsing errors, fallback to raw string
+        }
+      }
+
+      return m.role === 'user'
+        ? new HumanMessage(content)
+        : new AIMessage(content);
+    });
+
+    await this.cacheManager.set(id, [systemMessage, ...hydrated], 3600 * 1000);
+    return hydrated;
+  }
+
+  async persistChat(dto: ChatDto, aiMessage: AIMessage) {
+    const rowsToInsert = [
+      { chat_id: dto.chatId, role: 'user', content: dto.prompt },
+      { chat_id: dto.chatId, role: 'assistant', content: aiMessage.content },
+    ];
+    await this.db
+      .withSchema('chat')
+      .insert(rowsToInsert)
+      .into('chats_messages');
   }
 
   async deleteChatHistory(chatId: string) {

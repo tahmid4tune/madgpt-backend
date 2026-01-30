@@ -5,6 +5,8 @@ import { ChatModule } from './chat/chat.module';
 import { redisStore } from 'cache-manager-redis-store';
 import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { KnexModule } from 'nestjs-knex';
+import { getDBConnectionConfig } from './config/db/db.connection';
 
 @Module({
   imports: [
@@ -25,6 +27,15 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
       },
       inject: [ConfigService],
     }),
+    KnexModule.forRootAsync(
+      {
+        imports: [ConfigModule],
+        inject: [ConfigService],
+        useFactory: async (configService: ConfigService) =>
+          getDBConnectionConfig(configService),
+      },
+      'dbConnection',
+    ),
     ChatModule,
   ],
   controllers: [AppController],
