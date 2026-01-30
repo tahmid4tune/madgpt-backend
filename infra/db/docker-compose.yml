@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.1-pg18-trixie
+    container_name: pgvector-db
+    restart: unless-stopped
+    ports:
+      - '5436:5432'
+    environment:
+      POSTGRES_USER: madgptAdmin
+      POSTGRES_PASSWORD: madgptAdmin@1234.
+      POSTGRES_DB: madgptDB
+    volumes:
+      - pgdata:/var/lib/postgresql
+
+volumes:
+  pgdata:
