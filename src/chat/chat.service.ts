@@ -1,33 +1,32 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ChatDto } from './dto/chat.dto';
-import { AIMessage, HumanMessage } from '@langchain/core/messages';
-import { ChatGroq } from '@langchain/groq';
-import { ConfigService } from '@nestjs/config';
+import {
+  AIMessage,
+  HumanMessage,
+  SystemMessage,
+} from '@langchain/core/messages';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectConnection, Knex } from 'nestjs-knex';
 import { systemMessage } from './utils/system-message';
+import { ChatLLM } from './interfaces/llm.provider';
+import { LLMFactory } from './factory/llm.factory';
 
 @Injectable()
 export class ChatService {
-  private readonly llm: ChatGroq;
+  private llm: ChatLLM;
   constructor(
-    private readonly configService: ConfigService,
+    private readonly llmFactory: LLMFactory,
     @Inject(CACHE_MANAGER)
     private cacheManager: Cache,
     @InjectConnection('dbConnection')
     private readonly db: Knex,
-  ) {
-    this.llm = new ChatGroq({
-      apiKey: this.configService.get<string>('GROQ_API_KEY'),
-      model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-      temperature: 0.7,
-    });
-  }
+  ) {}
 
   async handlePrompt(dto: ChatDto) {
+    this.llm = this.llmFactory.create(dto.provider, dto.model);
     const history = await this.fetchChatHistory(dto);
-    const lcMessages = [...history, new HumanMessage(dto.prompt)];
+    let lcMessages = [...history, new HumanMessage(dto.prompt)];
     const response = await this.llm.invoke(lcMessages);
 
     if (!response) {
@@ -35,7 +34,9 @@ export class ChatService {
     }
 
     const aiMessage = new AIMessage(response.content);
-
+    if (lcMessages.length > 0 && lcMessages[0] instanceof SystemMessage) {
+      lcMessages = lcMessages.slice(1);
+    }
     await this.cacheManager.set(
       dto.chatId,
       [...lcMessages, aiMessage],
@@ -149,6 +150,17 @@ export class ChatService {
   }
 
   async deleteChatHistory(chatId: string) {
-    await this.cacheManager.del(chatId);
+    await Promise.all([
+      this.db
+        .withSchema('chat')
+        .delete()
+        .where('chat_id', chatId)
+        .from('chats_messages'),
+      this.db
+        .withSchema('chat')
+        .delete()
+        .where('id', chatId)
+        .from('chats_meta_data'),
+    ]);
   }
 }

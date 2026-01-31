@@ -8,6 +8,9 @@ import {
 
 export class ChatDto {
   @IsString()
+  provider: string;
+
+  @IsString()
   model: string;
 
   @IsUUID()
