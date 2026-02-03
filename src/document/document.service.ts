@@ -2,6 +2,8 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PDFParse } from 'pdf-parse';
 import { InjectConnection, Knex } from 'nestjs-knex';
 import { RagService } from '../rag/rag.service';
+import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
+import { DocumentType } from './types';
 
 @Injectable()
 export class DocumentService {
@@ -17,9 +19,20 @@ export class DocumentService {
     if (!text) {
       throw new BadRequestException('Empty PDF content');
     }
-    // 2. Generate embedding
-    const embedding = await this.generateEmbedding(text);
-    await this.saveDocument(file.originalname, text, embedding);
+    // 2. Chunk the text
+    const chunks = await this.splitText(text);
+    // 3. Generate embedding
+    const rows: DocumentType[] = [];
+    for (let i = 0; i < chunks.length; i++) {
+      const embedding = await this.generateEmbedding(chunks[i]);
+      rows.push({
+        name: file.originalname,
+        content: chunks[i],
+        embedding: `[${embedding.join(',')}]`,
+        chunk_id: i,
+      });
+    }
+    return await this.saveDocument(rows);
   }
 
   async parseTextFromPdf(file: Express.Multer.File) {
@@ -32,10 +45,16 @@ export class DocumentService {
     return await this.ragService.embedText(text);
   }
 
-  async saveDocument(name: string, content: string, embedding: number[]) {
-    await this.db
-      .withSchema('knowledge')
-      .insert({ name, content, embedding: `[${embedding.join(',')}]` })
-      .into('documents');
+  async saveDocument(rows: DocumentType[]) {
+    await this.db.withSchema('knowledge').insert(rows).into('documents');
+  }
+
+  async splitText(text: string) {
+    const splitter = new RecursiveCharacterTextSplitter({
+      chunkSize: 800,
+      chunkOverlap: 150,
+    });
+
+    return await splitter.splitText(text);
   }
 }
