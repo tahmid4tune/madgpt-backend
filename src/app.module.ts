@@ -7,6 +7,9 @@ import { CacheModule } from '@nestjs/cache-manager';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { KnexModule } from 'nestjs-knex';
 import { getDBConnectionConfig } from './config/db/db.connection';
+import { DocumentModule } from './document/document.module';
+import { AiModule } from './ai/ai.module';
+import { RagModule } from './rag/rag.module';
 
 @Module({
   imports: [
@@ -37,6 +40,9 @@ import { getDBConnectionConfig } from './config/db/db.connection';
       'dbConnection',
     ),
     ChatModule,
+    DocumentModule,
+    AiModule,
+    RagModule,
   ],
   controllers: [AppController],
   providers: [AppService],

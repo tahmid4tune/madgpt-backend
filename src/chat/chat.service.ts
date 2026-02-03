@@ -9,8 +9,9 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { Cache } from 'cache-manager';
 import { InjectConnection, Knex } from 'nestjs-knex';
 import { systemMessage } from './utils/system-message';
-import { ChatLLM } from './interfaces/llm.provider';
-import { LLMFactory } from './factory/llm.factory';
+import { ChatLLM } from '../ai/interfaces/llm.provider';
+import { LLMFactory } from '../ai/factory/llm.factory';
+import { RagService } from '../rag/rag.service';
 
 @Injectable()
 export class ChatService {
@@ -21,13 +22,28 @@ export class ChatService {
     private cacheManager: Cache,
     @InjectConnection('dbConnection')
     private readonly db: Knex,
+    private readonly ragService: RagService,
   ) {}
 
   async handlePrompt(dto: ChatDto) {
     this.llm = this.llmFactory.create(dto.provider, dto.model);
     const history = await this.fetchChatHistory(dto);
     let lcMessages = [...history, new HumanMessage(dto.prompt)];
-    const response = await this.llm.invoke(lcMessages);
+    const ragContext = await this.ragService.retrieveContext(dto.prompt);
+
+    const response = await this.llm.invoke(
+      ragContext
+        ? [
+            new SystemMessage(
+              `You are an assistant answering questions using ONLY the context below.
+        If the answer is not present, say you don't know.
+        Context:
+        ${ragContext}`,
+            ),
+            ...lcMessages,
+          ]
+        : lcMessages,
+    );
 
     if (!response) {
       throw new Error('LLM returned empty response');
