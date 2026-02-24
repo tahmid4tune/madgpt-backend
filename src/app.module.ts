@@ -10,7 +10,7 @@ import { getDBConnectionConfig } from './config/db/db.connection';
 import { DocumentModule } from './document/document.module';
 import { AiModule } from './ai/ai.module';
 import { RagModule } from './rag/rag.module';
-
+//import { McpServerModuleModule } from './mcp-server-module/mcp-server-module.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -43,6 +43,7 @@ import { RagModule } from './rag/rag.module';
     DocumentModule,
     AiModule,
     RagModule,
+    //    McpServerModuleModule,
   ],
   controllers: [AppController],
   providers: [AppService],

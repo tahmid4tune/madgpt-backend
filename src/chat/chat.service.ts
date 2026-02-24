@@ -12,10 +12,17 @@ import { systemMessage } from './utils/system-message';
 import { ChatLLM } from '../ai/interfaces/llm.provider';
 import { LLMFactory } from '../ai/factory/llm.factory';
 import { RagService } from '../rag/rag.service';
+import { ChatGroq } from '@langchain/groq';
+//import { McpClientService } from '../mcp-server-module/mcp-client.service';
 
 @Injectable()
 export class ChatService {
   private llm: ChatLLM;
+  private model = new ChatGroq({
+    apiKey: process.env.GROQ_API_KEY,
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    temperature: 0.7,
+  });
   constructor(
     private readonly llmFactory: LLMFactory,
     @Inject(CACHE_MANAGER)
@@ -23,6 +30,7 @@ export class ChatService {
     @InjectConnection('dbConnection')
     private readonly db: Knex,
     private readonly ragService: RagService,
+    //    private readonly mcpClientService: McpClientService,
   ) {}
 
   async handlePrompt(dto: ChatDto) {
@@ -60,6 +68,64 @@ export class ChatService {
     );
     this.persistChat(dto, aiMessage);
     return aiMessage;
+  }
+
+  async *streamResponse(dto: ChatDto) {
+    this.llm = this.llmFactory.create(dto.provider, dto.model);
+    const history = await this.fetchChatHistory(dto);
+    let lcMessages = [...history, new HumanMessage(dto.prompt)];
+    // Need to replace with a cheap LLM call to do or avoid the RAG check
+    const ragContext = await this.ragService.retrieveContext(dto.prompt);
+
+    /*
+    const parser = new StringOutputParser();
+    // Create a simple chain
+    const chain = this.model.pipe(parser);
+*/
+    // .stream() returns an AsyncIterable
+    const stream = await this.llm.stream(
+      ragContext
+        ? [
+            new SystemMessage(
+              `You are an assistant answering questions using ONLY the context below.
+      If the answer is not present, say you don't know.
+      Context:
+      ${ragContext}`,
+            ),
+            ...lcMessages,
+          ]
+        : lcMessages,
+    );
+    let aiMessageStr = '';
+    for await (const chunk of stream) {
+      // 1. Extract the content from the chunk object
+      const content =
+        typeof chunk === 'string'
+          ? chunk
+          : ((chunk as any)?.content as string) || '';
+
+      // 2. Accumulate for your DB/Cache
+      aiMessageStr += content;
+
+      // 3. Yield to the frontend immediately
+      if (content) {
+        yield { data: content };
+      }
+    }
+    if (!aiMessageStr) {
+      throw new Error('LLM returned empty response');
+    }
+    const aiMessage = new AIMessage(aiMessageStr);
+    if (lcMessages.length > 0 && lcMessages[0] instanceof SystemMessage) {
+      lcMessages = lcMessages.slice(1);
+    }
+    await this.cacheManager.set(
+      dto.chatId,
+      [...lcMessages, aiMessage],
+      3600 * 1000,
+    );
+    this.persistChat(dto, aiMessage);
+    yield { data: '##[DONE]##' };
   }
 
   async fetchChatHistory(dto: ChatDto): Promise<any> {
@@ -178,5 +244,21 @@ export class ChatService {
         .where('id', chatId)
         .from('chats_meta_data'),
     ]);
+  }
+
+  async toolCallIfNeeded(response: any) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(response.content);
+      if (parsed?.tool) {
+        /*   const toolResult = await this.mcpClientService.callTool(
+          parsed.tool,
+          parsed.arguments || {},
+        );
+      */
+      }
+    } catch (error) {
+      parsed = null;
+    }
   }
 }
