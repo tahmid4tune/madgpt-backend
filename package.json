@@ -23,6 +23,7 @@
   "dependencies": {
     "@langchain/core": "^1.1.17",
     "@langchain/groq": "^1.0.3",
+    "@langchain/langgraph": "^1.2.0",
     "@langchain/ollama": "^1.2.2",
     "@langchain/textsplitters": "^1.0.1",
     "@modelcontextprotocol/sdk": "^1.26.0",

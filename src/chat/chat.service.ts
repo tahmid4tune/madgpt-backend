@@ -13,7 +13,16 @@ import { ChatLLM } from '../ai/interfaces/llm.provider';
 import { LLMFactory } from '../ai/factory/llm.factory';
 import { RagService } from '../rag/rag.service';
 import { ChatGroq } from '@langchain/groq';
+import {
+  StateGraph,
+  MessagesAnnotation,
+  END,
+  START,
+} from '@langchain/langgraph';
+import { ToolNode } from '@langchain/langgraph/prebuilt';
+import { tool } from '@langchain/core/tools';
 //import { McpClientService } from '../mcp-server-module/mcp-client.service';
+import { z } from 'zod';
 
 @Injectable()
 export class ChatService {
@@ -72,17 +81,83 @@ export class ChatService {
 
   async *streamResponse(dto: ChatDto) {
     this.llm = this.llmFactory.create(dto.provider, dto.model);
+    const nativeModel = this.llm.instance;
+
+    const ragTool = tool(
+      async ({ query }) => {
+        const context = await this.ragService.retrieveContext(query);
+        return (
+          context || 'No specific information found in the knowledge base.'
+        );
+      },
+      {
+        name: 'search_docs',
+        description:
+          'Searches internal knowledge base for answering questions about specific persons.',
+        schema: z.object({ query: z.string() }),
+      },
+    );
+    const tools = [ragTool];
+    const toolNode = new ToolNode(tools);
+
+    // Bind tools to the model so it knows how to call them
+    const modelWithTools = nativeModel.bindTools(tools);
+
+    // 2. Define the Graph Nodes
+    const callModel = async (state: typeof MessagesAnnotation.State) => {
+      const response = await modelWithTools.invoke(state.messages);
+      return { messages: [response] };
+    };
+
+    // Logic to decide: continue to tools or finish?
+    const shouldContinue = (state: typeof MessagesAnnotation.State) => {
+      const lastMessage = state.messages[state.messages.length - 1];
+      // If the LLM made tool calls, we go to the "tools" node
+      if ((lastMessage as any).tool_calls?.length) {
+        return 'tools';
+      }
+      return END;
+    };
+    // 3. Build the Graph
+    const workflow = new StateGraph(MessagesAnnotation)
+      .addNode('tools', toolNode)
+      .addNode('agent', callModel)
+      .addEdge(START, 'agent')
+      .addConditionalEdges('agent', shouldContinue)
+      .addEdge('tools', 'agent'); // After tools, go back to agent to summarize
+
+    const agent = workflow.compile();
+
     const history = await this.fetchChatHistory(dto);
     let lcMessages = [...history, new HumanMessage(dto.prompt)];
-    // Need to replace with a cheap LLM call to do or avoid the RAG check
-    const ragContext = await this.ragService.retrieveContext(dto.prompt);
+    const input = { messages: lcMessages };
+    const eventStream = agent.streamEvents(input, { version: 'v2' });
+    let fullAiContent = '';
+    for await (const event of eventStream) {
+      // Filter for the final response generation tokens
+      if (event.event === 'on_chat_model_stream') {
+        const content = event.data.chunk.content;
+        if (content) {
+          fullAiContent += content;
+          yield { data: content };
+        }
+      }
+    }
+    // 5. Persistence
+    if (fullAiContent) {
+      const aiMessage = new AIMessage(fullAiContent);
+      if (lcMessages.length > 0 && lcMessages[0] instanceof SystemMessage) {
+        lcMessages = lcMessages.slice(1);
+      }
+      await this.cacheManager.set(
+        dto.chatId,
+        [...lcMessages, aiMessage],
+        3600 * 1000,
+      );
 
+      await this.persistChat(dto, aiMessage);
+    }
     /*
-    const parser = new StringOutputParser();
-    // Create a simple chain
-    const chain = this.model.pipe(parser);
-*/
-    // .stream() returns an AsyncIterable
     const stream = await this.llm.stream(
       ragContext
         ? [
@@ -124,7 +199,9 @@ export class ChatService {
       [...lcMessages, aiMessage],
       3600 * 1000,
     );
+
     this.persistChat(dto, aiMessage);
+    */
     yield { data: '##[DONE]##' };
   }
 

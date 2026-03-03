@@ -28,7 +28,7 @@ export class RagService {
     const results = await this.similaritySearch(embedding, 3);
     console.log('results:', results);
     if (!results.length) return null;
-    if (results[0].similarity < 0.5) return null;
+    if (results[0].similarity < 0.3) return null;
 
     return results.map((r) => r.content).join('\n\n---\n\n');
   }

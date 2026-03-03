@@ -3,6 +3,7 @@ import { ChatLLM } from '../llm.provider';
 import { BaseMessage } from '@langchain/core/messages';
 import { IterableReadableStream } from '@langchain/core/utils/stream';
 import { StringOutputParser } from '@langchain/core/output_parsers';
+import { BaseChatModel } from '@langchain/core/language_models/chat_models';
 
 export class OllamaLLM implements ChatLLM {
   private llm: ChatOllama;
@@ -13,6 +14,10 @@ export class OllamaLLM implements ChatLLM {
       model,
       temperature: 0.7,
     });
+  }
+
+  get instance(): BaseChatModel {
+    return this.llm;
   }
 
   invoke(messages: BaseMessage[]) {
